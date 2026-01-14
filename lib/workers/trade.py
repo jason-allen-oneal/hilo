@@ -1,0 +1,258 @@
+from PySide6.QtCore import QThread, Signal
+import threading
+from lib.utils import get_ticker, build_context
+from lib.buffer import RollingCandleBuffer
+from lib.rounds import RoundTracker, ROUND_MINUTES
+from threading import Event
+from typing import Optional, Callable, Dict, Tuple
+from lib.model.model import RoundModel
+import os
+
+import time
+from datetime import datetime, timezone, timedelta
+
+def sleep_until_next_minute():
+    now = datetime.now(timezone.utc)
+    seconds = 60 - (now.second + now.microsecond / 1_000_000)
+    time.sleep(max(seconds, 0))
+
+def _infer(model: Optional[RoundModel], ctx: dict, in_window: bool):
+    decision = "HOLD"
+    p_up = None
+    confidence = 0.0
+
+    if model is None or not in_window:
+        return decision, p_up, confidence
+
+    p_up = float(model.predict_proba(ctx))
+    bias = p_up - 0.5
+    confidence = abs(bias) * 2
+
+    if confidence < 0.1:
+        decision = "HOLD"
+    elif bias > 0:
+        decision = "UP"
+    else:
+        decision = "DOWN"
+
+    return decision, p_up, confidence
+
+
+def _prev_round_bounds(dt: datetime) -> Tuple[int, int]:
+    """
+    Given a timezone-aware datetime, return start/end timestamps (ms)
+    of the immediately previous 15-minute round.
+    """
+    prev_dt = dt - timedelta(minutes=ROUND_MINUTES)
+    prev_round_idx = prev_dt.minute // ROUND_MINUTES
+    start_minute = prev_round_idx * ROUND_MINUTES
+    start_dt = prev_dt.replace(minute=start_minute, second=0, microsecond=0)
+    end_dt = start_dt + timedelta(minutes=ROUND_MINUTES, seconds=-1, microseconds=0)
+    return int(start_dt.timestamp() * 1000), int(end_dt.timestamp() * 1000)
+
+
+def _find_round_close(buffer: RollingCandleBuffer, start_ts: int, end_ts: int) -> Optional[float]:
+    candles = buffer.candles_between(start_ts, end_ts + 1)
+    if not candles:
+        return None
+    return candles[-1].close
+
+def trading_loop(
+    stop_event: Event,
+    update_fn: Callable[[dict], None],
+):
+    # Keep exchange aligned with training data + live price feed
+    exchange = "coinbase"
+    symbol = "BTC-USD"
+    interval = "1m"
+
+    feed = get_ticker(exchange, symbol, interval)
+    buffer = RollingCandleBuffer(capacity=60)
+    rounds = RoundTracker(decision_window_minutes=13)
+
+    locked_prediction: Optional[Dict] = None  # {"round_id": (hour, round_idx), "prediction": str}
+    last_outcome: Optional[Dict] = None       # {"round_id": (hour, round_idx), "prediction": str, "actual": str, "correct": bool}
+    accuracy_total = 0
+    accuracy_correct = 0
+    last_round_close: Optional[float] = None
+
+    model_path = "lib/model/model.joblib"
+    model: Optional[RoundModel] = None
+    if os.path.exists(model_path):
+        try:
+            model = RoundModel(model_path)
+        except Exception:
+            model = None
+
+    # Backfill
+    backfilled = False
+    while not backfilled and not stop_event.is_set():
+        try:
+            for c in feed.fetch_latest(limit=60):
+                buffer.append(c)
+            backfilled = True
+        except Exception as exc:
+            print(f"[WARN] Trading backfill failed for {exchange}:{symbol}: {exc}")
+            time.sleep(3)
+            continue
+
+    # Initial fill from latest buffer candle
+    latest = buffer.latest()
+    if latest:
+        ctx = build_context(buffer)
+        if ctx:
+            ri = rounds.update(latest.close_time)
+            dt = datetime.fromtimestamp(latest.close_time / 1000, tz=timezone.utc)
+            prev_start, prev_end = _prev_round_bounds(dt)
+            last_round_close = _find_round_close(buffer, prev_start, prev_end)
+
+            decision, p_up, confidence = _infer(model, ctx, ri.is_decision_window)
+            change_pct = ((ctx["price_now"] / last_round_close) - 1.0) * 100.0 if last_round_close else None
+            update_fn({
+                "price": ctx["price_now"],
+                "decision": decision,
+                "p_up": p_up,
+                "confidence": confidence,
+                "round": ri.round_index,
+                "minute": ri.minute_in_round,
+                "ret_1m": ctx["ret_1m"],
+                "ret_5m": ctx["ret_5m"],
+                "ret_15m": ctx["ret_15m"],
+                "vol_15m": ctx["vol_15m"],
+                "vol_60m": ctx["vol_60m"],
+                "range_15m": ctx["range_15m"],
+                "volume_15m": ctx["volume_15m"],
+                "timestamp": ctx["timestamp"],
+                "locked_prediction": locked_prediction["prediction"] if locked_prediction else None,
+                "last_outcome": last_outcome,
+                "accuracy_correct": accuracy_correct,
+                "accuracy_total": accuracy_total,
+                "accuracy_pct": (accuracy_correct / accuracy_total * 100.0) if accuracy_total else None,
+                "last_round_close": last_round_close,
+                "change_pct": change_pct,
+            })
+
+    last_consumed_close_time: Optional[int] = None
+
+    while not stop_event.is_set():
+        if stop_event.wait(30):
+            break
+
+        try:
+            candles = feed.fetch_latest(limit=2)
+            appended = False
+            for c in candles:
+                if buffer.append(c):
+                    appended = True
+            latest = buffer.latest()
+            if not latest:
+                continue
+
+            if appended:
+                if last_consumed_close_time and latest.close_time <= last_consumed_close_time:
+                    continue
+                last_consumed_close_time = latest.close_time
+
+            ctx = build_context(buffer)
+            if not ctx:
+                continue
+
+            ri = rounds.update(latest.close_time)
+            decision, p_up, confidence = _infer(model, ctx, ri.is_decision_window)
+
+            round_id: Tuple[int, int] = (ri.hour, ri.round_index)
+
+            # Capture previous round close when a new round starts
+            if appended and ri.minute_in_round == 0 and ri.prev_round_start_ts and ri.prev_round_end_ts:
+                prev_close_candidate = _find_round_close(
+                    buffer,
+                    ri.prev_round_start_ts,
+                    ri.prev_round_end_ts,
+                )
+                if prev_close_candidate is not None:
+                    last_round_close = prev_close_candidate
+
+            # Lock the prediction on the penultimate candle of the round
+            if appended and ri.minute_in_round == (ROUND_MINUTES - 2):
+                locked_prediction = {
+                    "round_id": round_id,
+                    "prediction": decision,
+                    "timestamp": latest.close_time,
+                }
+
+            # Score the previous round at round end
+            if appended and ri.is_round_end and locked_prediction and locked_prediction.get("round_id") == round_id:
+                prev_close: Optional[float] = None
+                if ri.prev_round_start_ts and ri.prev_round_end_ts:
+                    prev_candles = buffer.candles_between(
+                        ri.prev_round_start_ts,
+                        ri.prev_round_end_ts + 1,
+                    )
+                    if prev_candles:
+                        prev_close = prev_candles[-1].close
+
+                actual_direction = None
+                if prev_close is not None:
+                    actual_direction = "UP" if latest.close > prev_close else "DOWN"
+
+                was_correct = (
+                    actual_direction is not None
+                    and locked_prediction["prediction"] in ("UP", "DOWN")
+                    and locked_prediction["prediction"] == actual_direction
+                )
+
+                if locked_prediction["prediction"] in ("UP", "DOWN") and actual_direction is not None:
+                    accuracy_total += 1
+                    if was_correct:
+                        accuracy_correct += 1
+
+                last_outcome = {
+                    "round_id": round_id,
+                    "prediction": locked_prediction["prediction"],
+                    "actual": actual_direction,
+                    "correct": was_correct if actual_direction is not None else None,
+                }
+                locked_prediction = None
+
+            update_fn({
+                "price": ctx["price_now"],
+                "decision": decision,
+                "p_up": p_up,
+                "confidence": confidence,
+                "round": ri.round_index,
+                "minute": ri.minute_in_round,
+                "ret_1m": ctx["ret_1m"],
+                "ret_5m": ctx["ret_5m"],
+                "ret_15m": ctx["ret_15m"],
+                "vol_15m": ctx["vol_15m"],
+                "vol_60m": ctx["vol_60m"],
+                "range_15m": ctx["range_15m"],
+                "volume_15m": ctx["volume_15m"],
+                "timestamp": ctx["timestamp"],
+                "locked_prediction": locked_prediction["prediction"] if locked_prediction else None,
+                "last_outcome": last_outcome,
+                "accuracy_correct": accuracy_correct,
+                "accuracy_total": accuracy_total,
+                "accuracy_pct": (accuracy_correct / accuracy_total * 100.0) if accuracy_total else None,
+                "last_round_close": last_round_close,
+                "change_pct": ((ctx["price_now"] / last_round_close) - 1.0) * 100.0 if last_round_close else None,
+            })
+
+        except Exception:
+            continue
+
+class TradingWorker(QThread):
+    model_update = Signal(dict)
+
+    def __init__(self):
+        super().__init__()
+        self.stop_event = threading.Event()
+
+    def run(self):
+        trading_loop(
+            stop_event=self.stop_event,
+            update_fn=self.model_update.emit,
+        )
+
+    def stop(self):
+        self.stop_event.set()

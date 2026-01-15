@@ -51,6 +51,8 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
     def rsi(period: int) -> float:
         if period <= 0:
             raise ValueError("period must be > 0")
+        if len(closes) < period + 1:
+            return 50.0  # Return neutral RSI if insufficient data
         gains = []
         losses = []
         for i in range(-period, 0):
@@ -150,10 +152,10 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
         return (price_now / period_low) - 1.0
 
     def price_acceleration() -> float:
-        """Price acceleration (second derivative)"""
+        """Price acceleration (rate of change of velocity)"""
         if len(closes) < 11:
             return 0.0
-        # Velocity at t vs t-5
+        # Velocity over last 5 periods vs velocity over previous 5 periods
         vel_now = closes[-1] - closes[-6]
         vel_prev = closes[-6] - closes[-11]
         return vel_now - vel_prev

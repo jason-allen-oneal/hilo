@@ -75,10 +75,8 @@ def build_logistic_model(C: float, class_weight=None) -> Pipeline:
 def build_xgboost_model(class_weight=None) -> Pipeline:
     # XGBoost with optimized hyperparameters for 15-minute BTC direction prediction
     # XGBoost handles feature scaling internally, but we keep StandardScaler for consistency
-    scale_pos_weight = None
-    if class_weight == "balanced":
-        # Will be set dynamically during training based on class distribution
-        scale_pos_weight = 1.0
+    # Note: scale_pos_weight should be set dynamically during training based on actual class distribution
+    # For now, we don't set it and let XGBoost handle it internally
     
     return Pipeline(
         steps=[
@@ -91,7 +89,6 @@ def build_xgboost_model(class_weight=None) -> Pipeline:
                 colsample_bytree=0.8,
                 eval_metric='logloss',
                 random_state=42,
-                scale_pos_weight=scale_pos_weight,
             )),
         ]
     )

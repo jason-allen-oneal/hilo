@@ -6,7 +6,7 @@ from lib.rounds import RoundTracker, ROUND_MINUTES
 from threading import Event
 from typing import Optional, Callable, Dict, Tuple
 from lib.model.model import RoundModel
-import os
+from pathlib import Path
 
 import time
 from datetime import datetime, timezone, timedelta
@@ -16,26 +16,32 @@ def sleep_until_next_minute():
     seconds = 60 - (now.second + now.microsecond / 1_000_000)
     time.sleep(max(seconds, 0))
 
-def _infer(model: Optional[RoundModel], ctx: dict, in_window: bool):
+def _infer(model: Optional[RoundModel], ctx: dict):
     decision = "HOLD"
     p_up = None
     confidence = 0.0
+    reason = "PREDICTING"
 
-    if model is None or not in_window:
-        return decision, p_up, confidence
+    # The trained model is fairly conservative (probs cluster near 0.5), so use a
+    # small bias threshold to avoid perpetual abstaining while still filtering noise.
+    min_bias = 0.005
+
+    if model is None:
+        reason = "NO_MODEL"
+        return decision, p_up, confidence, reason
 
     p_up = float(model.predict_proba(ctx))
     bias = p_up - 0.5
     confidence = abs(bias) * 2
 
-    if confidence < 0.1:
+    if abs(bias) < min_bias:
         decision = "HOLD"
     elif bias > 0:
         decision = "UP"
     else:
         decision = "DOWN"
 
-    return decision, p_up, confidence
+    return decision, p_up, confidence, reason
 
 
 def _prev_round_bounds(dt: datetime) -> Tuple[int, int]:
@@ -68,21 +74,25 @@ def trading_loop(
 
     feed = get_ticker(exchange, symbol, interval)
     buffer = RollingCandleBuffer(capacity=60)
-    rounds = RoundTracker(decision_window_minutes=13)
+    rounds = RoundTracker(decision_window_minutes=1)
 
     locked_prediction: Optional[Dict] = None  # {"round_id": (hour, round_idx), "prediction": str}
     last_outcome: Optional[Dict] = None       # {"round_id": (hour, round_idx), "prediction": str, "actual": str, "correct": bool}
     accuracy_total = 0
     accuracy_correct = 0
     last_round_close: Optional[float] = None
+    last_round_close_ts: Optional[int] = None
 
-    model_path = "lib/model/model.joblib"
+    model_path = Path(__file__).resolve().parent.parent / "model" / "model.joblib"
     model: Optional[RoundModel] = None
-    if os.path.exists(model_path):
+    if model_path.exists():
         try:
-            model = RoundModel(model_path)
-        except Exception:
+            model = RoundModel(str(model_path))
+        except Exception as exc:
+            print(f"[WARN] Failed to load model at {model_path}: {exc}")
             model = None
+    else:
+        print(f"[WARN] Model file not found at {model_path}")
 
     # Backfill
     backfilled = False
@@ -105,14 +115,16 @@ def trading_loop(
             dt = datetime.fromtimestamp(latest.close_time / 1000, tz=timezone.utc)
             prev_start, prev_end = _prev_round_bounds(dt)
             last_round_close = _find_round_close(buffer, prev_start, prev_end)
-
-            decision, p_up, confidence = _infer(model, ctx, ri.is_decision_window)
+            with open("change_log.txt", "a") as f:
+                f.write(f"Initial last_round_close: {last_round_close}\n")
+            decision, p_up, confidence, reason = _infer(model, ctx)
             change_pct = ((ctx["price_now"] / last_round_close) - 1.0) * 100.0 if last_round_close else None
             update_fn({
                 "price": ctx["price_now"],
                 "decision": decision,
                 "p_up": p_up,
                 "confidence": confidence,
+                "reason": reason,
                 "round": ri.round_index,
                 "minute": ri.minute_in_round,
                 "ret_1m": ctx["ret_1m"],
@@ -129,7 +141,7 @@ def trading_loop(
                 "accuracy_total": accuracy_total,
                 "accuracy_pct": (accuracy_correct / accuracy_total * 100.0) if accuracy_total else None,
                 "last_round_close": last_round_close,
-                "change_pct": change_pct,
+                "last_round_close_ts": last_round_close_ts,
             })
 
     last_consumed_close_time: Optional[int] = None
@@ -158,7 +170,7 @@ def trading_loop(
                 continue
 
             ri = rounds.update(latest.close_time)
-            decision, p_up, confidence = _infer(model, ctx, ri.is_decision_window)
+            decision, p_up, confidence, reason = _infer(model, ctx)
 
             round_id: Tuple[int, int] = (ri.hour, ri.round_index)
 
@@ -171,14 +183,20 @@ def trading_loop(
                 )
                 if prev_close_candidate is not None:
                     last_round_close = prev_close_candidate
+                    last_round_close_ts = ri.prev_round_end_ts
+                    with open("change_log.txt", "a") as f:
+                        f.write(f"Updated last_round_close: {last_round_close}\n")
 
-            # Lock the prediction on the penultimate candle of the round
-            if appended and ri.minute_in_round == (ROUND_MINUTES - 2):
-                locked_prediction = {
-                    "round_id": round_id,
-                    "prediction": decision,
-                    "timestamp": latest.close_time,
-                }
+            # Lock the prediction once we enter the final decision window.
+            if appended and ri.is_decision_window:
+                if locked_prediction is None or locked_prediction.get("round_id") != round_id:
+                    locked_prediction = {
+                        "round_id": round_id,
+                        "prediction": decision,
+                        "timestamp": latest.close_time,
+                    }
+                    with open("lock_log.txt", "a") as f:
+                        f.write(f"Prediction locked: {locked_prediction}\n")
 
             # Score the previous round at round end
             if appended and ri.is_round_end and locked_prediction and locked_prediction.get("round_id") == round_id:
@@ -219,6 +237,7 @@ def trading_loop(
                 "decision": decision,
                 "p_up": p_up,
                 "confidence": confidence,
+                "reason": reason,
                 "round": ri.round_index,
                 "minute": ri.minute_in_round,
                 "ret_1m": ctx["ret_1m"],
@@ -235,7 +254,7 @@ def trading_loop(
                 "accuracy_total": accuracy_total,
                 "accuracy_pct": (accuracy_correct / accuracy_total * 100.0) if accuracy_total else None,
                 "last_round_close": last_round_close,
-                "change_pct": ((ctx["price_now"] / last_round_close) - 1.0) * 100.0 if last_round_close else None,
+                "last_round_close_ts": last_round_close_ts,
             })
 
         except Exception:

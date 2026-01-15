@@ -63,8 +63,9 @@ class RoundTracker:
 
         is_round_start = minute_in_round == 0
         is_round_end = minute_in_round == (ROUND_MINUTES - 1)
+        # Decision window is the final N minutes of the round.
         is_decision_window = (
-            minute_in_round >= (ROUND_MINUTES - self.decision_window_minutes - 1)
+            minute_in_round >= (ROUND_MINUTES - self.decision_window_minutes)
         )
 
         current_round_id = (hour, round_index)

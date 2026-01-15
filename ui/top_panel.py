@@ -67,6 +67,7 @@ class TopPanel(QWidget):
         self._window_seconds = 60
         self._price_history = deque()  # (timestamp, price)
         self._last_round_close: float | None = None
+        self._last_round_close_ts: int | None = None
 
         self.time_timer = QTimer(self)
         self.time_timer.setInterval(1000)
@@ -105,8 +106,14 @@ class TopPanel(QWidget):
         else:
             self.round_label.setText(f"Round: {rnd}")
         last_round_close = data.get("last_round_close")
+        last_round_close_ts = data.get("last_round_close_ts")
         if last_round_close:
-            self._last_round_close = last_round_close
+            if self._last_round_close_ts is None or (
+                last_round_close_ts is not None
+                and last_round_close_ts >= self._last_round_close_ts
+            ):
+                self._last_round_close = last_round_close
+                self._last_round_close_ts = last_round_close_ts
 
         locked_pred = data.get("locked_prediction", None)
         last_outcome = data.get("last_outcome", None)
@@ -118,17 +125,19 @@ class TopPanel(QWidget):
         else:
             self.locked_box.update_value("—")
 
-        display_prediction = None
         if last_outcome and last_outcome.get("actual"):
             actual = last_outcome["actual"]
             pred = last_outcome.get("prediction")
             correct = last_outcome.get("correct")
             suffix = "✓" if correct else "✕" if correct is not None else ""
-            display_prediction = f"{pred} ({actual}) {suffix}"
+            self.prediction_box.update_value(f"{pred} ({actual}) {suffix}")
         else:
-            display_prediction = "HOLD (no model)" if p_up is None else f"{decision}"
+            p_up = data.get("p_up")
+            if p_up is None:
+                self.prediction_box.update_value("HOLD (no model)")
+            else:
+                self.prediction_box.update_value(f"{data['decision']}")
 
-        self.prediction_box.update_value(display_prediction)
 
         acc_total = data.get("accuracy_total", 0)
         acc_correct = data.get("accuracy_correct", 0)

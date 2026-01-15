@@ -11,16 +11,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 
-
-FEATURES = [
-    "ret_1m",
-    "ret_5m",
-    "ret_15m",
-    "vol_15m",
-    "vol_60m",
-    "range_15m",
-    "volume_15m",
-]
+from lib.model.features import FEATURES
 
 
 def load_dataset(path: Path) -> Tuple[np.ndarray, np.ndarray]:

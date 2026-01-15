@@ -1,0 +1,27 @@
+# lib/model/features.py
+
+FEATURES = [
+    "price_now",
+    "prev_15m_close",
+    "ret_1m",
+    "ret_5m",
+    "ret_15m",
+    "vol_15m",
+    "vol_60m",
+    "range_15m",
+    "volume_15m",
+    "rsi_14",
+    "macd",
+    "macd_signal",
+    "macd_hist",
+    "bb_position",
+    "hour_of_day",
+    "day_of_week",
+    "momentum_5m",
+    "momentum_15m",
+    "momentum_30m",
+    "dist_sma_5",
+    "dist_sma_15",
+    "dist_sma_30",
+    "dist_sma_60",
+]

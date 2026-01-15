@@ -62,7 +62,7 @@ def main():
     granularity_sec = 60
 
     # How much history you want:
-    days = 14  # change this (start small, then increase)
+    days = 90  # change this (start small, then increase)
 
     # Coinbase limits how many candles you can get per request.
     # We'll request in chunks of 300 minutes (~5 hours) to stay safe.

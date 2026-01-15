@@ -88,6 +88,100 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
         average = sma(closes[-period:])
         return (price_now / average) - 1.0
 
+    # ---- Volume-based features ----
+    def volume_trend(period: int) -> float:
+        """Volume trend - is volume increasing?"""
+        if len(candles) < period * 2:
+            return 0.0
+        recent_vol = sum(c.volume for c in candles[-period:])
+        previous_vol = sum(c.volume for c in candles[-period*2:-period])
+        if previous_vol == 0:
+            return 0.0
+        return (recent_vol / previous_vol) - 1.0
+
+    def vwap_distance() -> float:
+        """Volume-weighted average price distance"""
+        last_15 = candles[-15:]
+        total_vol = sum(c.volume for c in last_15)
+        if total_vol == 0:
+            return 0.0
+        vwap = sum(c.close * c.volume for c in last_15) / total_vol
+        return (price_now / vwap) - 1.0
+
+    # ---- Volatility features ----
+    def atr(period: int = 14) -> float:
+        """ATR (Average True Range) - normalized"""
+        if len(candles) < period + 1:
+            return 0.0
+        true_ranges = []
+        for i in range(-period, 0):
+            high_low = candles[i].high - candles[i].low
+            high_close = abs(candles[i].high - candles[i-1].close)
+            low_close = abs(candles[i].low - candles[i-1].close)
+            true_ranges.append(max(high_low, high_close, low_close))
+        avg_tr = sum(true_ranges) / len(true_ranges)
+        return avg_tr / price_now if price_now > 0 else 0.0
+
+    def bb_width(period: int = 20, num_std: float = 2.0) -> float:
+        """Bollinger Band width (volatility proxy)"""
+        if len(closes) < period:
+            return 0.0
+        window = closes[-period:]
+        mean = sma(window)
+        variance = sum((x - mean) ** 2 for x in window) / len(window)
+        std = math.sqrt(variance)
+        if mean == 0:
+            return 0.0
+        return (2 * num_std * std) / mean
+
+    # ---- Price action features ----
+    def distance_from_high(period: int) -> float:
+        """Recent high distance"""
+        if len(candles) < period:
+            return 0.0
+        period_high = max(c.high for c in candles[-period:])
+        return (price_now / period_high) - 1.0
+
+    def distance_from_low(period: int) -> float:
+        """Recent low distance"""
+        if len(candles) < period:
+            return 0.0
+        period_low = min(c.low for c in candles[-period:])
+        return (price_now / period_low) - 1.0
+
+    def price_acceleration() -> float:
+        """Price acceleration (second derivative)"""
+        if len(closes) < 11:
+            return 0.0
+        # Velocity at t vs t-5
+        vel_now = closes[-1] - closes[-6]
+        vel_prev = closes[-6] - closes[-11]
+        return vel_now - vel_prev
+
+    # ---- Cross-timeframe features ----
+    def ema_alignment() -> float:
+        """EMA alignment (trend confirmation across timeframes)"""
+        if len(closes) < 30:
+            return 0.0
+        ema5 = ema(closes, 5)
+        ema15 = ema(closes, 15)
+        ema30 = ema(closes, 30)
+        # Score: +1 if all aligned bullish, -1 if all bearish, 0 otherwise
+        if ema5 > ema15 > ema30:
+            return 1.0
+        elif ema5 < ema15 < ema30:
+            return -1.0
+        else:
+            return 0.0
+
+    def rsi_divergence() -> float:
+        """Multi-timeframe RSI divergence"""
+        if len(closes) < 31:
+            return 0.0
+        rsi_14 = rsi(14)
+        rsi_30 = rsi(30)
+        return rsi_14 - rsi_30
+
     def macd_signal(macd_values: list[float]) -> float:
         return ema(macd_values, 9)
 
@@ -134,6 +228,26 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
         "dist_sma_15": price_distance_from_sma(15),
         "dist_sma_30": price_distance_from_sma(30),
         "dist_sma_60": price_distance_from_sma(60),
+        
+        # New volume-based features
+        "volume_trend_5m": volume_trend(5),
+        "volume_trend_15m": volume_trend(15),
+        "vwap_distance": vwap_distance(),
+        
+        # New volatility features
+        "atr_14": atr(14),
+        "bb_width": bb_width(20),
+        
+        # New price action features
+        "distance_from_high_15m": distance_from_high(15),
+        "distance_from_high_60m": distance_from_high(60),
+        "distance_from_low_15m": distance_from_low(15),
+        "distance_from_low_60m": distance_from_low(60),
+        "price_acceleration": price_acceleration(),
+        
+        # New cross-timeframe features
+        "ema_alignment": ema_alignment(),
+        "rsi_divergence": rsi_divergence(),
     }
 
 def get_ticker(exchange: str, symbol: str, interval: str = "1m") -> Feed:

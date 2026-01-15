@@ -22,9 +22,9 @@ def _infer(model: Optional[RoundModel], ctx: dict):
     confidence = 0.0
     reason = "PREDICTING"
 
-    # The trained model is fairly conservative (probs cluster near 0.5), so use a
-    # small bias threshold to avoid perpetual abstaining while still filtering noise.
-    min_bias = 0.005
+    # XGBoost gives more confident predictions (less clustering near 0.5),
+    # so we use a higher bias threshold to filter out weak signals.
+    min_bias = 0.02
 
     if model is None:
         reason = "NO_MODEL"

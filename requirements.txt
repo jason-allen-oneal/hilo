@@ -5,3 +5,4 @@ numpy
 websockets
 PySide6
 matplotlib
+xgboost

@@ -114,7 +114,7 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
         if total_vol < EPSILON:  # Check for near-zero
             return 0.0
         vwap = sum(c.close * c.volume for c in last_15) / total_vol
-        if vwap < EPSILON:  # Prevent division by near-zero
+        if abs(vwap) < EPSILON:  # Prevent division by near-zero (use abs for safety)
             return 0.0
         return (price_now / vwap) - 1.0
 
@@ -140,7 +140,7 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
             return 0.0
         window = closes[-period:]
         mean = sma(window)
-        if mean < EPSILON:  # Check for near-zero mean
+        if abs(mean) < EPSILON:  # Check for near-zero mean (use abs for safety)
             return 0.0
         variance = sum((x - mean) ** 2 for x in window) / len(window)
         std = math.sqrt(variance)

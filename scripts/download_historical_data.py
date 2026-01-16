@@ -11,10 +11,14 @@ import argparse
 import csv
 import time
 from datetime import datetime, timedelta, timezone
+from dateutil.relativedelta import relativedelta
 from pathlib import Path
 from typing import List, Optional
 
 import ccxt
+
+# Constants
+MINUTE_MS = 60000  # Milliseconds in a minute
 
 
 def download_candles(
@@ -54,7 +58,7 @@ def download_candles(
             all_candles.extend(candles)
             
             # Move to next batch
-            current_ts = candles[-1][0] + 60000  # Add 1 minute in ms
+            current_ts = candles[-1][0] + MINUTE_MS  # Add 1 minute in ms
             
             # Rate limiting
             time.sleep(exchange.rateLimit / 1000)
@@ -111,11 +115,11 @@ def validate_data(candles: List[List]) -> None:
     # Check for gaps (missing minutes)
     gaps = 0
     for i in range(1, len(candles)):
-        expected_ts = candles[i-1][0] + 60000  # Previous + 1 minute
+        expected_ts = candles[i-1][0] + MINUTE_MS  # Previous + 1 minute
         actual_ts = candles[i][0]
         
         if actual_ts != expected_ts:
-            gap_minutes = (actual_ts - expected_ts) // 60000
+            gap_minutes = (actual_ts - expected_ts) // MINUTE_MS
             if gap_minutes > 0:
                 gaps += gap_minutes
     
@@ -169,7 +173,7 @@ def main():
     
     # Setup exchange
     if args.exchange == 'coinbase':
-        exchange = ccxt.coinbase({'enableRateLimit': True})
+        exchange = ccxt.coinbasepro({'enableRateLimit': True})
         symbol = 'BTC/USD'
     else:  # binance
         exchange = ccxt.binance({'enableRateLimit': True})
@@ -184,7 +188,7 @@ def main():
     if args.start_date:
         start_date = datetime.strptime(args.start_date, '%Y-%m-%d').replace(tzinfo=timezone.utc)
     else:
-        start_date = end_date - timedelta(days=args.months * 30)
+        start_date = end_date - relativedelta(months=args.months)
     
     start_ts = int(start_date.timestamp() * 1000)
     end_ts = int(end_date.timestamp() * 1000)

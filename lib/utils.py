@@ -4,10 +4,16 @@ from lib.clients.binance import BinanceFeed
 from lib.clients.coinbase import CoinbaseFeed
 from lib.Feed import Feed
 import math
+import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict
 
 from lib.buffer import RollingCandleBuffer
+
+# Epsilon for near-zero comparisons to prevent division issues
+EPSILON = 1e-10
+
+logger = logging.getLogger(__name__)
 
 
 def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
@@ -97,7 +103,7 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
             return 0.0
         recent_vol = sum(c.volume for c in candles[-period:])
         previous_vol = sum(c.volume for c in candles[-period*2:-period])
-        if previous_vol == 0 or previous_vol < 1e-10:  # FIX: Check for near-zero
+        if previous_vol < EPSILON:  # Check for near-zero
             return 0.0
         return (recent_vol / previous_vol) - 1.0
 
@@ -105,10 +111,10 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
         """Volume-weighted average price distance"""
         last_15 = candles[-15:]
         total_vol = sum(c.volume for c in last_15)
-        if total_vol == 0 or total_vol < 1e-10:  # FIX: Check for near-zero
+        if total_vol < EPSILON:  # Check for near-zero
             return 0.0
         vwap = sum(c.close * c.volume for c in last_15) / total_vol
-        if vwap == 0:  # FIX: Prevent division by zero
+        if vwap < EPSILON:  # Prevent division by near-zero
             return 0.0
         return (price_now / vwap) - 1.0
 
@@ -123,7 +129,7 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
             high_close = abs(candles[i].high - candles[i-1].close)
             low_close = abs(candles[i].low - candles[i-1].close)
             true_ranges.append(max(high_low, high_close, low_close))
-        if not true_ranges or price_now == 0:  # FIX: Check empty list and zero price
+        if not true_ranges or price_now < EPSILON:  # Check empty list and near-zero price
             return 0.0
         avg_tr = sum(true_ranges) / len(true_ranges)
         return avg_tr / price_now
@@ -134,10 +140,10 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
             return 0.0
         window = closes[-period:]
         mean = sma(window)
+        if mean < EPSILON:  # Check for near-zero mean
+            return 0.0
         variance = sum((x - mean) ** 2 for x in window) / len(window)
         std = math.sqrt(variance)
-        if mean == 0:
-            return 0.0
         return (2 * num_std * std) / mean
 
     # ---- Price action features ----
@@ -270,9 +276,9 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
             invalid_features.append(f"{key}: Inf")
     
     if invalid_features:
-        print(f"[ERROR] Invalid features detected:")
+        logger.error("Invalid features detected:")
         for err in invalid_features:
-            print(f"  - {err}")
+            logger.error(f"  - {err}")
         return None
     
     return result

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Download historical 1-minute BTC-USD candlestick data from Coinbase Pro.
+Download historical 1-minute BTC-USD candlestick data from Coinbase Exchange.
 
 Usage:
     python scripts/download_historical_data.py --months 12
@@ -137,7 +137,7 @@ def validate_data(candles: List[List]) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Download historical 1-minute BTC-USD data from Coinbase Pro or Binance"
+        description="Download historical 1-minute BTC-USD data from Coinbase Exchange or Binance"
     )
     parser.add_argument(
         '--months',
@@ -166,14 +166,14 @@ def main():
         type=str,
         default='coinbase',
         choices=['coinbase', 'binance'],
-        help='Exchange to download from (coinbase uses Coinbase Pro API)'
+        help='Exchange to download from (coinbase uses Coinbase Exchange API)'
     )
     
     args = parser.parse_args()
     
     # Setup exchange
     if args.exchange == 'coinbase':
-        exchange = ccxt.coinbasepro({'enableRateLimit': True})
+        exchange = ccxt.coinbaseexchange({'enableRateLimit': True})
         symbol = 'BTC/USD'
     else:  # binance
         exchange = ccxt.binance({'enableRateLimit': True})

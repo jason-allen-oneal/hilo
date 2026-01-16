@@ -13,7 +13,7 @@ pip install -r requirements.txt
 To improve model accuracy, download more historical data:
 
 ```bash
-# Download 12 months (default)
+# Download 12 months (default) from Coinbase Exchange
 python scripts/download_historical_data.py
 
 # Download specific date range

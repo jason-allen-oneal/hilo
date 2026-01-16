@@ -10,6 +10,7 @@ import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
+from xgboost import XGBClassifier
 
 from lib.model.features import FEATURES
 
@@ -54,7 +55,7 @@ def load_dataset(path: Path) -> Tuple[np.ndarray, np.ndarray]:
     return np.asarray(X_rows, dtype=np.float64), np.asarray(y_rows, dtype=np.int64)
 
 
-def build_model(C: float, class_weight=None) -> Pipeline:
+def build_logistic_model(C: float, class_weight=None) -> Pipeline:
     # LogisticRegression defaults to L2 penalty already.
     # We explicitly set only stable, non-deprecated params.
     return Pipeline(
@@ -71,12 +72,55 @@ def build_model(C: float, class_weight=None) -> Pipeline:
     )
 
 
+def build_xgboost_model(class_weight=None) -> Pipeline:
+    # XGBoost with optimized hyperparameters for 15-minute BTC direction prediction
+    # XGBoost handles feature scaling internally, but we keep StandardScaler for consistency
+    # Note: scale_pos_weight should be set dynamically during training based on actual class distribution
+    # For now, we don't set it and let XGBoost handle it internally
+    
+    return Pipeline(
+        steps=[
+            ("scaler", StandardScaler()),
+            ("clf", XGBClassifier(
+                n_estimators=200,
+                max_depth=5,
+                learning_rate=0.05,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                eval_metric='logloss',
+                random_state=42,
+            )),
+        ]
+    )
+
+
+def build_model(C: float = 1.0, class_weight=None, model_type: str = "xgboost") -> Pipeline:
+    """
+    Build a model pipeline based on model_type.
+    
+    Args:
+        C: Inverse regularization strength (used only for logistic regression)
+        class_weight: Class weight strategy ('balanced' or None)
+        model_type: Type of model ('logistic' or 'xgboost')
+    
+    Returns:
+        sklearn Pipeline with scaler and classifier
+    """
+    if model_type == "logistic":
+        return build_logistic_model(C, class_weight)
+    elif model_type == "xgboost":
+        return build_xgboost_model(class_weight)
+    else:
+        raise ValueError(f"Unknown model_type: {model_type}. Choose 'logistic' or 'xgboost'.")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Train round direction model from CSV dataset.")
     ap.add_argument("--data", type=Path, default=Path("data/round_dataset.csv"), help="Path to dataset CSV")
     ap.add_argument("--out", type=Path, default=Path("lib/model/model.joblib"), help="Output joblib path")
     ap.add_argument("--C", type=float, default=1.0, help="Inverse regularization strength (higher = weaker reg)")
     ap.add_argument("--class-weight", choices=["none", "balanced"], default="none", help="Class weight strategy")
+    ap.add_argument("--model-type", choices=["logistic", "xgboost"], default="xgboost", help="Model type to train")
     args = ap.parse_args()
 
     X, y = load_dataset(args.data)
@@ -91,7 +135,7 @@ def main() -> int:
 
     class_weight = None if args.class_weight == "none" else "balanced"
 
-    model = build_model(args.C, class_weight=class_weight)
+    model = build_model(args.C, class_weight=class_weight, model_type=args.model_type)
     model.fit(X, y)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)

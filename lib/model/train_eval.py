@@ -47,6 +47,7 @@ def crossval_score(
     y: np.ndarray,
     Cs: Iterable[float],
     class_weight,
+    model_type: str = "xgboost",
 ) -> Tuple[float, float]:
     """
     Returns (best_C, best_auc).
@@ -62,7 +63,7 @@ def crossval_score(
         losses: List[float] = []
 
         for train_idx, val_idx in splitter.split(X):
-            model = build_model(C, class_weight=class_weight)
+            model = build_model(C, class_weight=class_weight, model_type=model_type)
             model.fit(X[train_idx], y[train_idx])
 
             probs = model.predict_proba(X[val_idx])[:, 1]
@@ -118,6 +119,7 @@ def main() -> int:
     ap.add_argument("--C-grid", type=str, default="0.1,0.5,1.0,2.0,5.0", help="Comma-separated C values to try")
     ap.add_argument("--class-weight", choices=["none", "balanced"], default="none", help="Class weight strategy")
     ap.add_argument("--calibrate", action="store_true", help="Calibrate probabilities with sigmoid scaling")
+    ap.add_argument("--model-type", choices=["logistic", "xgboost"], default="xgboost", help="Model type to train")
     args = ap.parse_args()
 
     print("[STEP] Building dataset...")
@@ -152,19 +154,19 @@ def main() -> int:
     class_weight = None if args.class_weight == "none" else "balanced"
 
     print("[STEP] Tuning C with time-series CV...")
-    best_C, best_auc = crossval_score(X_train, y_train, Cs=Cs, class_weight=class_weight)
+    best_C, best_auc = crossval_score(X_train, y_train, Cs=Cs, class_weight=class_weight, model_type=args.model_type)
     print(f"[OK] Best C={best_C} (mean CV AUC={best_auc:.4f})")
 
     if args.calibrate:
         splits = choose_time_series_splits(len(y_train))
         calibrator = CalibratedClassifierCV(
-            estimator=build_model(best_C, class_weight=class_weight),
+            estimator=build_model(best_C, class_weight=class_weight, model_type=args.model_type),
             cv=TimeSeriesSplit(n_splits=splits),
             method="sigmoid",
         )
         model = calibrator.fit(X_train, y_train)
     else:
-        model = build_model(best_C, class_weight=class_weight).fit(X_train, y_train)
+        model = build_model(best_C, class_weight=class_weight, model_type=args.model_type).fit(X_train, y_train)
 
     print("[STEP] Evaluating on hold-out tail...")
     auc, ll, brier, bins = evaluate_model(model, X_val, y_val)
@@ -179,12 +181,12 @@ def main() -> int:
     if args.calibrate:
         splits = choose_time_series_splits(len(y))
         final_model = CalibratedClassifierCV(
-            estimator=build_model(best_C, class_weight=class_weight),
+            estimator=build_model(best_C, class_weight=class_weight, model_type=args.model_type),
             cv=TimeSeriesSplit(n_splits=splits),
             method="sigmoid",
         ).fit(X, y)
     else:
-        final_model = build_model(best_C, class_weight=class_weight).fit(X, y)
+        final_model = build_model(best_C, class_weight=class_weight, model_type=args.model_type).fit(X, y)
 
     args.model_out.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(final_model, args.model_out)

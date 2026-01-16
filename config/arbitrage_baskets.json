@@ -1,0 +1,9 @@
+{
+  "baskets": [
+    {
+      "name": "Example election outcome basket",
+      "description": "Three mutually exclusive outcomes for a sample event.",
+      "token_ids": ["1001", "1002", "1003"]
+    }
+  ]
+}

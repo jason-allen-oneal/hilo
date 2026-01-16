@@ -129,7 +129,9 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
             high_close = abs(candles[i].high - candles[i-1].close)
             low_close = abs(candles[i].low - candles[i-1].close)
             true_ranges.append(max(high_low, high_close, low_close))
-        if not true_ranges or price_now < EPSILON:  # Check empty list and near-zero price
+        if not true_ranges:  # Check if list is empty
+            return 0.0
+        if price_now < EPSILON:  # Check for near-zero price
             return 0.0
         avg_tr = sum(true_ranges) / len(true_ranges)
         return avg_tr / price_now

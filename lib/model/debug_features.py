@@ -36,7 +36,7 @@ def analyze_features(csv_path: Path):
         has_nan = np.isnan(arr).any()
         has_inf = np.isinf(arr).any()
         
-        status = "⚠️  INVALID" if (has_nan or has_inf) else "✓"
+        status = "⚠️  INVALID" if has_nan or has_inf else "✓"
         
         print(f"{feature:30s} | {status:10s} | "
               f"min={np.nanmin(arr):10.4f} | "

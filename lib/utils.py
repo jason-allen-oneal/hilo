@@ -97,7 +97,7 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
             return 0.0
         recent_vol = sum(c.volume for c in candles[-period:])
         previous_vol = sum(c.volume for c in candles[-period*2:-period])
-        if previous_vol == 0:
+        if previous_vol == 0 or previous_vol < 1e-10:  # FIX: Check for near-zero
             return 0.0
         return (recent_vol / previous_vol) - 1.0
 
@@ -105,9 +105,11 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
         """Volume-weighted average price distance"""
         last_15 = candles[-15:]
         total_vol = sum(c.volume for c in last_15)
-        if total_vol == 0:
+        if total_vol == 0 or total_vol < 1e-10:  # FIX: Check for near-zero
             return 0.0
         vwap = sum(c.close * c.volume for c in last_15) / total_vol
+        if vwap == 0:  # FIX: Prevent division by zero
+            return 0.0
         return (price_now / vwap) - 1.0
 
     # ---- Volatility features ----
@@ -117,12 +119,16 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
             return 0.0
         true_ranges = []
         for i in range(-period, 0):
+            if i - 1 < -len(candles):  # FIX: Bounds check
+                continue
             high_low = candles[i].high - candles[i].low
             high_close = abs(candles[i].high - candles[i-1].close)
             low_close = abs(candles[i].low - candles[i-1].close)
             true_ranges.append(max(high_low, high_close, low_close))
+        if not true_ranges or price_now == 0:  # FIX: Check empty list
+            return 0.0
         avg_tr = sum(true_ranges) / len(true_ranges)
-        return avg_tr / price_now if price_now > 0 else 0.0
+        return avg_tr / price_now
 
     def bb_width(period: int = 20, num_std: float = 2.0) -> float:
         """Bollinger Band width (volatility proxy)"""
@@ -153,7 +159,7 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
 
     def price_acceleration() -> float:
         """Price acceleration (rate of change of velocity)"""
-        if len(closes) < 11:
+        if len(closes) < 12:  # FIX: Need at least 12 candles
             return 0.0
         # Velocity over last 5 periods vs velocity over previous 5 periods
         vel_now = closes[-1] - closes[-6]
@@ -202,7 +208,8 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
 
     timestamp_dt = datetime.fromtimestamp(latest.close_time / 1000, tz=timezone.utc)
 
-    return {
+    # ===== FEATURE VALIDATION (ADD BEFORE RETURN) =====
+    result = {
         "timestamp": latest.close_time,
         "price_now": price_now,
         "prev_15m_close": prev_15m_close,
@@ -251,6 +258,26 @@ def build_context(buffer: RollingCandleBuffer) -> Optional[Dict[str, float]]:
         "ema_alignment": ema_alignment(),
         "rsi_divergence": rsi_divergence(),
     }
+    
+    # Validate all features before returning
+    invalid_features = []
+    for key, value in result.items():
+        if key == "timestamp":  # Skip timestamp validation
+            continue
+        if not isinstance(value, (int, float)):
+            invalid_features.append(f"{key}: not numeric ({type(value)})")
+        elif math.isnan(value):
+            invalid_features.append(f"{key}: NaN")
+        elif math.isinf(value):
+            invalid_features.append(f"{key}: Inf")
+    
+    if invalid_features:
+        print(f"[ERROR] Invalid features detected:")
+        for err in invalid_features:
+            print(f"  - {err}")
+        return None
+    
+    return result
 
 def get_ticker(exchange: str, symbol: str, interval: str = "1m") -> Feed:
     exchange = exchange.lower()

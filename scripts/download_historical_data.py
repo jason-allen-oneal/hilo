@@ -137,7 +137,7 @@ def validate_data(candles: List[List]) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Download historical 1-minute BTC-USD data from Coinbase Pro"
+        description="Download historical 1-minute BTC-USD data from Coinbase Pro or Binance"
     )
     parser.add_argument(
         '--months',
@@ -166,7 +166,7 @@ def main():
         type=str,
         default='coinbase',
         choices=['coinbase', 'binance'],
-        help='Exchange to download from'
+        help='Exchange to download from (coinbase uses Coinbase Pro API)'
     )
     
     args = parser.parse_args()

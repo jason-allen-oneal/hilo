@@ -6,3 +6,5 @@ websockets
 PySide6
 matplotlib
 xgboost
+ccxt>=4.0.0
+python-dateutil

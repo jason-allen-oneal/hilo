@@ -24,16 +24,7 @@ FEATURES = [
     "dist_sma_15",
     "dist_sma_30",
     "dist_sma_60",
-    "volume_trend_5m",
-    "volume_trend_15m",
-    "vwap_distance",
-    "atr_14",
-    "bb_width",
-    "distance_from_high_15m",
-    "distance_from_high_60m",
-    "distance_from_low_15m",
-    "distance_from_low_60m",
-    "price_acceleration",
+    # Add only the helpful cross-timeframe features
     "ema_alignment",
     "rsi_divergence",
 ]

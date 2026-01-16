@@ -195,7 +195,7 @@ def main():
     
     print(f"[INFO] Downloading {symbol} from {args.exchange}")
     print(f"[INFO] Date range: {start_date.date()} to {end_date.date()}")
-    print(f"[INFO] Estimated candles: ~{(end_ts - start_ts) // 60000:,}")
+    print(f"[INFO] Estimated candles: ~{(end_ts - start_ts) // MINUTE_MS:,}")
     
     # Download data
     candles = download_candles(exchange, symbol, start_ts, end_ts)
